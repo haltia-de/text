@@ -5,12 +5,14 @@
 The first page offers «Новая заметка» and the files opened lately; a file
 can also come from Файлы (b8k-text FILE). The header shows the file's name,
 with a dot while there are unsaved changes; «Сохранить» writes it (a new
-note asks for a name and goes to ~/Документы), "←" goes back to the first
-page and asks first when something is unsaved. Text only: UTF-8, at most
-2 MB.
+note asks for a name and goes to ~/Документы), «Удалить» moves the file to
+the trash, "←" goes back to the first page and asks first when something is
+unsaved. A long press on a recent file offers to delete it or only to take
+it off the list. Text only: UTF-8, at most 2 MB.
 """
 import json
 import os
+import subprocess
 import sys
 import threading
 
@@ -45,6 +47,17 @@ button.save, button.new {
   color: #ffffff;
 }
 button.save:disabled { background-color: #99c1f1; }
+button.drop {
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 16px;
+  min-height: 72px;
+  font-size: 24px;
+  padding: 0 24px;
+  background-color: #f2f2f0;
+  color: #c01c28;
+}
 list, row { background-color: #f2f2f0; }
 row { padding: 10px 16px; }
 row:hover { background-color: #e8e8e6; }
@@ -62,6 +75,29 @@ dialog button { font-size: 22px; min-height: 60px; padding: 0 24px; }
 
 def ask(question, yes):
     return b8k_ui.ask(question, yes) if b8k_ui else True
+
+
+def menu(title, items):
+    """A list question in the shell's style (fuzzel); the index or None."""
+    try:
+        res = subprocess.run(
+            ["fuzzel", "--config", "/usr/local/share/b8k/fuzzel-ask.ini", "--dmenu",
+             "--index", "--mesg", title, "--cache", "/dev/null",
+             "--select-index", str(len(items))],
+            input="\n".join(items + ["Отмена"]) + "\n",
+            capture_output=True, text=True, timeout=600)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = res.stdout.strip()
+    return int(out) if out.isdigit() and int(out) < len(items) else None
+
+
+def trash(path):
+    """To the trash, or deleted where there is no trash."""
+    try:
+        Gio.File.new_for_path(path).trash(None)
+    except GLib.Error:
+        os.unlink(path)
 
 
 def documents():
@@ -111,6 +147,11 @@ class Text(Gtk.Application):
         self.save_btn.connect("clicked", lambda *_a: self.save())
         self.save_btn.set_no_show_all(True)
         self.header.pack_end(self.save_btn)
+        self.drop_btn = Gtk.Button(label="Удалить")
+        self.drop_btn.get_style_context().add_class("drop")
+        self.drop_btn.connect("clicked", lambda *_a: self.delete_current())
+        self.drop_btn.set_no_show_all(True)
+        self.header.pack_end(self.drop_btn)
         self.win.set_titlebar(self.header)
 
         self.stack = Gtk.Stack()
@@ -127,7 +168,11 @@ class Text(Gtk.Application):
         start.pack_start(self.recent_note, False, False, 0)
         scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
         self.recent_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
-        self.recent_list.connect("row-activated", lambda _l, row: self.open_path(row.path))
+        self.recent_list.connect("row-activated", self.on_recent)
+        # A long press on a recent file: delete it, or only forget it.
+        self.hold = Gtk.GestureLongPress(widget=self.recent_list)
+        self.hold.connect("pressed", self.on_hold)
+        self.held = False
         scroll.add(self.recent_list)
         start.pack_start(scroll, True, True, 0)
         self.stack.add_named(start, "start")
@@ -173,12 +218,66 @@ class Text(Gtk.Application):
             json.dump(items[:RECENT_MAX], fh, ensure_ascii=False)
         os.replace(RECENT + ".new", RECENT)
 
+    def forget(self, path):
+        items = [p for p in self.recent() if p != path]
+        os.makedirs(os.path.dirname(RECENT), exist_ok=True)
+        with open(RECENT + ".new", "w", encoding="utf-8") as fh:
+            json.dump(items, fh, ensure_ascii=False)
+        os.replace(RECENT + ".new", RECENT)
+
+    def on_recent(self, _list, row):
+        if self.held:
+            self.held = False
+            return
+        self.open_path(row.path)
+
+    def on_hold(self, _g, _x, y):
+        row = self.recent_list.get_row_at_y(int(y))
+        if not row:
+            return
+        self.held = True
+        GLib.timeout_add(1500, lambda: setattr(self, "held", False))
+        path = row.path
+
+        def worker():
+            choice = menu("«%s»" % os.path.basename(path),
+                          ["Удалить заметку", "Убрать из недавних"])
+            if choice is not None:
+                GLib.idle_add(self.drop_recent, path, choice == 0)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def drop_recent(self, path, delete):
+        if delete:
+            try:
+                trash(path)
+            except OSError as exc:
+                self.message("Не удалось удалить: %s" % exc.strerror)
+        self.forget(path)
+        self.show_start()
+        return False
+
+    def delete_current(self):
+        if not self.path:
+            # A new note not yet saved: nothing on disk, only drop the text.
+            self.dirty = False
+            self.show_start()
+            return
+        path = self.path
+
+        def worker():
+            if ask("Удалить «%s»?" % os.path.basename(path), "Удалить"):
+                GLib.idle_add(self.drop_recent, path, True)
+
+        threading.Thread(target=worker, daemon=True).start()
+
     def show_start(self):
         self.path = None
         self.dirty = False
         self.header.set_title("Блокнот")
         self.back_btn.hide()
         self.save_btn.hide()
+        self.drop_btn.hide()
         for child in self.recent_list.get_children():
             self.recent_list.remove(child)
             child.destroy()
@@ -231,6 +330,7 @@ class Text(Gtk.Application):
         self.update_title()
         self.back_btn.show()
         self.save_btn.show()
+        self.drop_btn.show()
         self.stack.set_visible_child_name("edit")
         buf = self.view.get_buffer()
         buf.place_cursor(buf.get_start_iter())
