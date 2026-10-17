@@ -1,0 +1,346 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: GPL-2.0
+"""Блокнот: plain text in large type.
+
+The first page offers «Новая заметка» and the files opened lately; a file
+can also come from Файлы (b8k-text FILE). The header shows the file's name,
+with a dot while there are unsaved changes; «Сохранить» writes it (a new
+note asks for a name and goes to ~/Документы), "←" goes back to the first
+page and asks first when something is unsaved. Text only: UTF-8, at most
+2 MB.
+"""
+import json
+import os
+import sys
+import threading
+
+import gi
+
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gdk, Gio, GLib, GObject, Gtk, Pango
+
+sys.path.insert(0, "/usr/local/share/b8k/python")
+try:
+    import b8k_ui
+except ImportError:
+    b8k_ui = None
+
+RECENT = os.path.expanduser("~/.local/share/b8k-text/recent.json")
+RECENT_MAX = 20
+SIZE_MAX = 2 * 1024 * 1024
+
+CSS = b"""
+window, .page { background-color: #e6e6e4; }
+headerbar label.title { font-size: 30px; font-weight: bold; color: #2e3436; }
+button.save, button.new {
+  background-image: none;
+  border: none;
+  box-shadow: none;
+  border-radius: 16px;
+  min-height: 72px;
+  font-size: 24px;
+  padding: 0 24px;
+  background-color: #3584e4;
+  color: #ffffff;
+}
+button.save:disabled { background-color: #99c1f1; }
+list, row { background-color: #f2f2f0; }
+row { padding: 10px 16px; }
+row:hover { background-color: #e8e8e6; }
+row:active { background-color: #c4dcf7; }
+row label.name { font-size: 24px; color: #2e3436; }
+row label.sub { font-size: 18px; color: #5e5c64; }
+label.note { font-size: 24px; color: #5e5c64; }
+textview, textview text { font-family: "DejaVu Sans"; font-size: 24px;
+  color: #2e3436; background-color: #f2f2f0; }
+dialog entry { font-size: 26px; min-height: 64px; }
+dialog label { font-size: 24px; }
+dialog button { font-size: 22px; min-height: 60px; padding: 0 24px; }
+"""
+
+
+def ask(question, yes):
+    return b8k_ui.ask(question, yes) if b8k_ui else True
+
+
+def documents():
+    try:
+        import subprocess
+
+        out = subprocess.run(["xdg-user-dir", "DOCUMENTS"], capture_output=True, text=True,
+                             timeout=3).stdout.strip()
+        if out and out != os.path.expanduser("~"):
+            return out
+    except (OSError, ValueError):
+        pass
+    return os.path.expanduser("~/Документы")
+
+
+class Text(Gtk.Application):
+    def __init__(self):
+        super().__init__(application_id="b8k.Text", flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        self.win = None
+        self.path = None
+        self.dirty = False
+        self.loading = False
+
+    # --- the window ---------------------------------------------------------
+    def setup(self):
+        if self.win:
+            return
+        if b8k_ui:
+            buzz = b8k_ui.Buzz()
+            GObject.type_class_ref(Gtk.Button)
+            GObject.add_emission_hook(Gtk.Button, "pressed", buzz)
+        provider = Gtk.CssProvider()
+        provider.load_from_data((b8k_ui.HEADER_CSS if b8k_ui else b"") + CSS)
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.win = Gtk.ApplicationWindow(application=self, title="Блокнот")
+        self.win.set_default_size(1160, 800)
+        self.win.connect("delete-event", self.on_close)
+        self.header = Gtk.HeaderBar(title="Блокнот")
+        self.back_btn = Gtk.Button(label="←")
+        self.back_btn.get_style_context().add_class("back")
+        self.back_btn.connect("clicked", lambda *_a: self.leave(self.show_start))
+        self.back_btn.set_no_show_all(True)
+        self.header.pack_start(self.back_btn)
+        self.save_btn = Gtk.Button(label="Сохранить")
+        self.save_btn.get_style_context().add_class("save")
+        self.save_btn.connect("clicked", lambda *_a: self.save())
+        self.save_btn.set_no_show_all(True)
+        self.header.pack_end(self.save_btn)
+        self.win.set_titlebar(self.header)
+
+        self.stack = Gtk.Stack()
+        start = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        start.set_border_width(16)
+        start.get_style_context().add_class("page")
+        new = Gtk.Button(label="Новая заметка")
+        new.get_style_context().add_class("new")
+        new.set_halign(Gtk.Align.START)
+        new.connect("clicked", lambda *_a: self.edit(None, ""))
+        start.pack_start(new, False, False, 0)
+        self.recent_note = Gtk.Label(xalign=0)
+        self.recent_note.get_style_context().add_class("note")
+        start.pack_start(self.recent_note, False, False, 0)
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self.recent_list = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
+        self.recent_list.connect("row-activated", lambda _l, row: self.open_path(row.path))
+        scroll.add(self.recent_list)
+        start.pack_start(scroll, True, True, 0)
+        self.stack.add_named(start, "start")
+
+        scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+        self.view = Gtk.TextView(wrap_mode=Gtk.WrapMode.WORD_CHAR)
+        self.view.set_left_margin(20)
+        self.view.set_right_margin(20)
+        self.view.set_top_margin(16)
+        self.view.set_bottom_margin(16)
+        self.view.get_buffer().connect("changed", self.on_changed)
+        scroll.add(self.view)
+        self.stack.add_named(scroll, "edit")
+        self.win.add(self.stack)
+        self.win.show_all()
+
+    def do_activate(self):
+        first = self.win is None
+        self.setup()
+        if first:
+            self.show_start()
+        self.win.present()
+
+    def do_open(self, files, _n, _hint):
+        self.setup()
+        path = files[0].get_path() if files else None
+        self.win.present()
+        if path:
+            self.leave(lambda: self.open_path(path))
+
+    # --- the first page -------------------------------------------------------
+    def recent(self):
+        try:
+            with open(RECENT, encoding="utf-8") as fh:
+                return [p for p in json.load(fh) if os.path.isfile(p)]
+        except (OSError, ValueError):
+            return []
+
+    def remember(self, path):
+        items = [path] + [p for p in self.recent() if p != path]
+        os.makedirs(os.path.dirname(RECENT), exist_ok=True)
+        with open(RECENT + ".new", "w", encoding="utf-8") as fh:
+            json.dump(items[:RECENT_MAX], fh, ensure_ascii=False)
+        os.replace(RECENT + ".new", RECENT)
+
+    def show_start(self):
+        self.path = None
+        self.dirty = False
+        self.header.set_title("Блокнот")
+        self.back_btn.hide()
+        self.save_btn.hide()
+        for child in self.recent_list.get_children():
+            self.recent_list.remove(child)
+            child.destroy()
+        items = self.recent()
+        self.recent_note.set_text("Недавние" if items else "Недавних файлов пока нет.")
+        self.recent_list.set_visible(bool(items))
+        home = os.path.expanduser("~")
+        for path in items:
+            row = Gtk.ListBoxRow()
+            row.path = path
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            name = Gtk.Label(label=os.path.basename(path), xalign=0)
+            name.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+            name.get_style_context().add_class("name")
+            where = os.path.dirname(path)
+            sub = Gtk.Label(label=where.replace(home, "~", 1), xalign=0)
+            sub.set_ellipsize(Pango.EllipsizeMode.START)
+            sub.get_style_context().add_class("sub")
+            box.pack_start(name, False, False, 0)
+            box.pack_start(sub, False, False, 0)
+            row.add(box)
+            self.recent_list.add(row)
+        self.recent_list.show_all()
+        self.stack.set_visible_child_name("start")
+        self.win.set_focus(None)
+
+    # --- editing --------------------------------------------------------------
+    def open_path(self, path):
+        try:
+            if os.path.getsize(path) > SIZE_MAX:
+                self.message("Файл больше 2 МБ — Блокнот его не откроет.")
+                return
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except UnicodeDecodeError:
+            self.message("Это не текстовый файл.")
+            return
+        except OSError as exc:
+            self.message("Не удалось открыть: %s" % exc.strerror)
+            return
+        self.remember(path)
+        self.edit(path, text)
+
+    def edit(self, path, text):
+        self.path = path
+        self.loading = True
+        self.view.get_buffer().set_text(text)
+        self.loading = False
+        self.dirty = False
+        self.update_title()
+        self.back_btn.show()
+        self.save_btn.show()
+        self.stack.set_visible_child_name("edit")
+        buf = self.view.get_buffer()
+        buf.place_cursor(buf.get_start_iter())
+        if not path:
+            self.view.grab_focus()  # a new note: the keyboard comes up
+        else:
+            self.win.set_focus(None)  # reading first; a tap starts typing
+
+    def on_changed(self, _buf):
+        if not self.loading and not self.dirty:
+            self.dirty = True
+            self.update_title()
+
+    def update_title(self):
+        name = os.path.basename(self.path) if self.path else "Новая заметка"
+        self.header.set_title(("• " if self.dirty else "") + name)
+
+    def save(self):
+        path = self.path
+        if not path:
+            name = self.ask_name()
+            if not name:
+                return False
+            folder = documents()
+            os.makedirs(folder, exist_ok=True)
+            if "." not in name:
+                name += ".txt"
+            path = os.path.join(folder, name)
+            if os.path.exists(path) and not self.confirm("Файл «%s» уже есть. Заменить?" % name):
+                return False
+        buf = self.view.get_buffer()
+        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        try:
+            with open(path + ".b8k-new", "w", encoding="utf-8") as fh:
+                fh.write(text)
+            try:
+                os.chmod(path + ".b8k-new", os.stat(path).st_mode & 0o7777)
+            except OSError:
+                pass
+            os.replace(path + ".b8k-new", path)
+        except OSError as exc:
+            self.message("Не удалось сохранить: %s" % exc.strerror)
+            return False
+        self.path = path
+        self.dirty = False
+        self.remember(path)
+        self.update_title()
+        return True
+
+    def leave(self, then):
+        """Run then(), asking first whether to keep unsaved changes."""
+        if not self.dirty:
+            then()
+            return
+
+        def worker():
+            yes = ask("Сохранить изменения?", "Сохранить")
+
+            def back():
+                if yes is None or yes:
+                    if self.save():
+                        then()
+                else:
+                    then()
+                return False
+
+            GLib.idle_add(back)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def on_close(self, *_a):
+        if not self.dirty:
+            return False
+        if self.confirm("Закрыть без сохранения?"):
+            return False
+        return True
+
+    # --- small dialogs ----------------------------------------------------------
+    def ask_name(self):
+        dialog = Gtk.Dialog(title="Название", transient_for=self.win, modal=True)
+        dialog.add_button("Отмена", Gtk.ResponseType.CANCEL)
+        dialog.add_button("Сохранить", Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        box = dialog.get_content_area()
+        box.set_spacing(12)
+        box.set_border_width(16)
+        box.pack_start(Gtk.Label(label="Как назвать заметку?"), False, False, 0)
+        entry = Gtk.Entry(text="Заметка", activates_default=True)
+        box.pack_start(entry, False, False, 0)
+        dialog.show_all()
+        res = dialog.run()
+        text = entry.get_text().strip().replace("/", "")
+        dialog.destroy()
+        return text if res == Gtk.ResponseType.OK and text not in ("", ".", "..") else None
+
+    def confirm(self, text):
+        dialog = Gtk.MessageDialog(transient_for=self.win, modal=True,
+                                   message_type=Gtk.MessageType.QUESTION,
+                                   buttons=Gtk.ButtonsType.YES_NO, text=text)
+        res = dialog.run()
+        dialog.destroy()
+        return res == Gtk.ResponseType.YES
+
+    def message(self, text):
+        dialog = Gtk.MessageDialog(transient_for=self.win, modal=True,
+                                   message_type=Gtk.MessageType.INFO,
+                                   buttons=Gtk.ButtonsType.OK, text=text)
+        dialog.run()
+        dialog.destroy()
+
+
+if __name__ == "__main__":
+    sys.exit(Text().run(sys.argv))
