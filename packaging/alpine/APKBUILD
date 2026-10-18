@@ -1,6 +1,6 @@
 # Maintainer: Mikhail Nevskiy <rensomail@gmail.com>
 pkgname=b8k-text
-pkgver=1.2
+pkgver=1.2.1
 pkgrel=0
 pkgdesc="Блокнот: Plain text in large type (GTK 3)"
 url="https://github.com/trudenboy/b8k-text"
