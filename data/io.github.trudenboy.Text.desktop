@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Notepad
+Name[ru]=Блокнот
+Comment=Plain text in large type
+Comment[ru]=Простой текст крупным шрифтом
+Exec=b8k-text %F
+Icon=io.github.trudenboy.Text
+Terminal=false
+Categories=GTK;Utility;TextEditor;
+Keywords=text;notes;editor;заметки;текст;блокнот;
+StartupNotify=true
+MimeType=text/plain;
+X-B8K-Home=true
+X-B8K-Replaces=text
