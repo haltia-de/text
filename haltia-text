@@ -76,6 +76,9 @@ dialog button { font-size: 22px; min-height: 60px; padding: 0 24px; }
 """
 
 
+# Inside the Haltia shell (its session sets XDG_CURRENT_DESKTOP=Haltia:GNOME).
+ON_HALTIA = "Haltia" in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")
+
 def trash(path):
     """To the trash, or deleted where there is no trash."""
     try:
@@ -117,6 +120,9 @@ class Text(Gtk.Application):
         self.win.set_default_size(1160, 800)
         self.win.connect("delete-event", self.on_close)
         self.header = Gtk.HeaderBar(title="Блокнот")
+        # The Haltia shell closes windows with its own button; any other desktop
+        # gets the usual window buttons in the header.
+        self.header.set_show_close_button(not ON_HALTIA)
         self.back_btn = Gtk.Button(label="←")
         self.back_btn.get_style_context().add_class("back")
         self.back_btn.connect("clicked", lambda *_a: self.leave(self.show_start))
