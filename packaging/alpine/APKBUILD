@@ -1,13 +1,17 @@
 # Maintainer: Mikhail Nevskiy <rensomail@gmail.com>
-pkgname=b8k-text
-pkgver=1.2.1
+pkgname=haltia-text
+pkgver=2.0.0
 pkgrel=0
-pkgdesc="Блокнот: Plain text in large type (GTK 3)"
-url="https://github.com/trudenboy/b8k-text"
+pkgdesc="Блокнот: plain text, easy to read (GTK 3)"
+url="https://github.com/haltia-de/text"
 arch="noarch"
+# The name before ADR 0004: apk upgrade carries b8k-text over to this.
+provides="b8k-text=$pkgver-r$pkgrel"
+replaces="b8k-text"
 license="GPL-2.0-only"
-depends="python3 py3-gobject3 gtk+3.0 py3-b8k-compat"
-source="$pkgname-$pkgver.tar.gz::https://github.com/trudenboy/b8k-text/archive/v$pkgver.tar.gz"
+depends="python3 py3-gobject3 gtk+3.0 py3-haltia-kit"
+source="$pkgname-$pkgver.tar.gz::https://github.com/haltia-de/text/archive/v$pkgver.tar.gz"
+builddir="$srcdir/text-$pkgver"
 
 options="!check"
 

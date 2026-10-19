@@ -3,7 +3,7 @@
 """Блокнот: plain text in large type.
 
 The first page offers «Новая заметка» and the files opened lately; a file
-can also come from Файлы (b8k-text FILE). The header shows the file's name,
+can also come from Файлы (haltia-text FILE). The header shows the file's name,
 with a dot while there are unsaved changes; «Сохранить» writes it (a new
 note asks for a name and goes to ~/Документы), «Удалить» moves the file to
 the trash, "←" goes back to the first page and asks first when something is
@@ -17,17 +17,21 @@ import sys
 import gi
 from gi.repository import GLib
 
-APP_ID = "io.github.trudenboy.Text"
+APP_ID = "io.github.haltia_de.Text"
 # Under Wayland GTK 3 names the window by the program name: the program's
-# id, as its .desktop file is named, so a desktop or the b8k shell finds it.
+# id, as its .desktop file is named, so a desktop or the Haltia shell finds it.
 GLib.set_prgname(APP_ID)
 
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
-from b8k_compat import dialogs  # noqa: E402
+from haltia_kit import dialogs  # noqa: E402
 from gi.repository import Gdk, Gio, GLib, Gtk, Pango  # noqa: E402,F811
 
-RECENT = os.path.expanduser("~/.local/share/b8k-text/recent.json")
+from haltia_kit import paths  # noqa: E402
+
+# Until 3.0: the folder from before the rename moves (ADR 0004).
+paths.migrate_dirs("b8k-text", "haltia-text")
+RECENT = os.path.expanduser("~/.local/share/haltia-text/recent.json")
 RECENT_MAX = 20
 SIZE_MAX = 2 * 1024 * 1024
 
@@ -342,13 +346,13 @@ class Text(Gtk.Application):
         buf = self.view.get_buffer()
         text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         try:
-            with open(path + ".b8k-new", "w", encoding="utf-8") as fh:
+            with open(path + ".haltia-new", "w", encoding="utf-8") as fh:
                 fh.write(text)
             try:
-                os.chmod(path + ".b8k-new", os.stat(path).st_mode & 0o7777)
+                os.chmod(path + ".haltia-new", os.stat(path).st_mode & 0o7777)
             except OSError:
                 pass
-            os.replace(path + ".b8k-new", path)
+            os.replace(path + ".haltia-new", path)
         except OSError as exc:
             self.message("Не удалось сохранить: %s" % exc.strerror)
             return False
