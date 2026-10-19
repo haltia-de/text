@@ -1,6 +1,6 @@
 # Maintainer: Mikhail Nevskiy <rensomail@gmail.com>
 pkgname=haltia-text
-pkgver=2.0.0
+pkgver=2.0.1
 pkgrel=0
 pkgdesc="Блокнот: plain text, easy to read (GTK 3)"
 url="https://github.com/haltia-de/text"
