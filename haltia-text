@@ -14,7 +14,7 @@ import json
 import os
 import sys
 import tempfile
-import uuid
+from datetime import datetime
 
 import gi
 from gi.repository import GLib
@@ -371,7 +371,17 @@ class Text(Gtk.Application):
         self.cancel_autosave()
         path = self.path
         if not path and automatic:
-            path = os.path.join(documents(), "Заметка-%s.txt" % uuid.uuid4().hex)
+            now = datetime.now()
+            months = ("января", "февраля", "марта", "апреля", "мая", "июня",
+                      "июля", "августа", "сентября", "октября", "ноября", "декабря")
+            name = "Заметка %s %s %s" % (now.day, months[now.month - 1],
+                                           now.strftime("%H-%M"))
+            folder = documents()
+            path = os.path.join(folder, name + ".txt")
+            suffix = 2
+            while os.path.exists(path):
+                path = os.path.join(folder, "%s (%s).txt" % (name, suffix))
+                suffix += 1
         if not path:
             name = self.ask_name()
             if not name:
@@ -396,9 +406,10 @@ class Text(Gtk.Application):
                 fh.flush()
                 os.fsync(fh.fileno())
             try:
-                os.chmod(temporary, os.stat(path).st_mode & 0o7777)
-            except OSError:
-                pass
+                mode = os.stat(path).st_mode & 0o7777
+            except FileNotFoundError:
+                mode = 0o644
+            os.chmod(temporary, mode)
             os.replace(temporary, path)
         except OSError as exc:
             self.message("Не удалось сохранить: %s" % exc.strerror)
@@ -435,6 +446,7 @@ class Text(Gtk.Application):
         if not self.dirty or self.save(automatic=True):
             return False
         if self.confirm("Закрыть без сохранения?", "Закрыть"):
+            self.dirty = False
             return False
         return True
 
