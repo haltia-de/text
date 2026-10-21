@@ -13,6 +13,8 @@ it off the list. Text only: UTF-8, at most 2 MB.
 import json
 import os
 import sys
+import tempfile
+import uuid
 
 import gi
 from gi.repository import GLib
@@ -79,12 +81,15 @@ dialog button { font-size: 22px; min-height: 60px; padding: 0 24px; }
 # Inside the Haltia shell (its session sets XDG_CURRENT_DESKTOP=Haltia:GNOME).
 ON_HALTIA = "Haltia" in os.environ.get("XDG_CURRENT_DESKTOP", "").split(":")
 
-def trash(path):
-    """To the trash, or deleted where there is no trash."""
+def trash(path, parent):
+    """Ask before deleting permanently when the trash is unavailable."""
     try:
         Gio.File.new_for_path(path).trash(None)
     except GLib.Error:
+        if not dialogs.ask(parent, "Удалить навсегда?", "Удалить"):
+            return False
         os.unlink(path)
+    return True
 
 
 def documents():
@@ -107,6 +112,7 @@ class Text(Gtk.Application):
         self.path = None
         self.dirty = False
         self.loading = False
+        self.autosave_source = None
 
     # --- the window ---------------------------------------------------------
     def setup(self):
@@ -119,6 +125,7 @@ class Text(Gtk.Application):
         self.win = Gtk.ApplicationWindow(application=self, title="Блокнот")
         self.win.set_default_size(1160, 800)
         self.win.connect("delete-event", self.on_close)
+        self.win.connect("hide", self.on_hide)
         self.header = Gtk.HeaderBar(title="Блокнот")
         # The Haltia shell closes windows with its own button; any other desktop
         # gets the usual window buttons in the header.
@@ -242,23 +249,30 @@ class Text(Gtk.Application):
     def drop_recent(self, path, delete):
         if delete:
             try:
-                trash(path)
+                if not trash(path, self.win):
+                    return False
             except OSError as exc:
                 self.message("Не удалось удалить: %s" % exc.strerror)
+                return False
         self.forget(path)
         self.show_start()
         return False
 
     def delete_current(self):
+        self.cancel_autosave()
         if not self.path:
-            # A new note not yet saved: nothing on disk, only drop the text.
-            self.dirty = False
-            self.show_start()
+            if not self.dirty or dialogs.ask(self.win, "Удалить заметку?", "Удалить"):
+                self.show_start()
+            elif self.dirty:
+                self.autosave_source = GLib.timeout_add(3000, self.autosave)
             return
         if dialogs.ask(self.win, "Удалить «%s»?" % os.path.basename(self.path), "Удалить"):
             self.drop_recent(self.path, True)
+        if self.dirty:
+            self.autosave_source = GLib.timeout_add(3000, self.autosave)
 
     def show_start(self):
+        self.cancel_autosave()
         self.path = None
         self.dirty = False
         self.header.set_title("Блокнот")
@@ -309,6 +323,7 @@ class Text(Gtk.Application):
         self.edit(path, text)
 
     def edit(self, path, text):
+        self.cancel_autosave()
         self.path = path
         self.loading = True
         self.view.get_buffer().set_text(text)
@@ -326,23 +341,42 @@ class Text(Gtk.Application):
         else:
             self.win.set_focus(None)  # reading first; a tap starts typing
 
+    def cancel_autosave(self):
+        if self.autosave_source is not None:
+            GLib.source_remove(self.autosave_source)
+            self.autosave_source = None
+
     def on_changed(self, _buf):
-        if not self.loading and not self.dirty:
+        if not self.loading:
             self.dirty = True
             self.update_title()
+            self.cancel_autosave()
+            self.autosave_source = GLib.timeout_add(3000, self.autosave)
+
+    def autosave(self):
+        self.autosave_source = None
+        if self.dirty:
+            self.save(automatic=True)
+        return False
+
+    def on_hide(self, *_a):
+        self.cancel_autosave()
+        self.autosave()
 
     def update_title(self):
         name = os.path.basename(self.path) if self.path else "Новая заметка"
         self.header.set_title(("• " if self.dirty else "") + name)
 
-    def save(self):
+    def save(self, automatic=False):
+        self.cancel_autosave()
         path = self.path
+        if not path and automatic:
+            path = os.path.join(documents(), "Заметка-%s.txt" % uuid.uuid4().hex)
         if not path:
             name = self.ask_name()
             if not name:
                 return False
             folder = documents()
-            os.makedirs(folder, exist_ok=True)
             if "." not in name:
                 name += ".txt"
             path = os.path.join(folder, name)
@@ -351,17 +385,27 @@ class Text(Gtk.Application):
                 return False
         buf = self.view.get_buffer()
         text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+        temporary = None
         try:
-            with open(path + ".haltia-new", "w", encoding="utf-8") as fh:
+            os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=os.path.dirname(os.path.abspath(path)),
+                                             prefix=".haltia-text-", delete=False) as fh:
+                temporary = fh.name
                 fh.write(text)
+                fh.flush()
+                os.fsync(fh.fileno())
             try:
-                os.chmod(path + ".haltia-new", os.stat(path).st_mode & 0o7777)
+                os.chmod(temporary, os.stat(path).st_mode & 0o7777)
             except OSError:
                 pass
-            os.replace(path + ".haltia-new", path)
+            os.replace(temporary, path)
         except OSError as exc:
             self.message("Не удалось сохранить: %s" % exc.strerror)
             return False
+        finally:
+            if temporary and os.path.exists(temporary):
+                os.unlink(temporary)
         self.path = path
         self.dirty = False
         self.remember(path)
@@ -370,6 +414,7 @@ class Text(Gtk.Application):
 
     def leave(self, then):
         """Run then(), asking first whether to keep unsaved changes."""
+        self.cancel_autosave()
         if not self.dirty:
             then()
             return
@@ -382,9 +427,12 @@ class Text(Gtk.Application):
                 then()
         elif choice == 1:
             then()
+        if self.dirty:
+            self.autosave_source = GLib.timeout_add(3000, self.autosave)
 
     def on_close(self, *_a):
-        if not self.dirty:
+        self.cancel_autosave()
+        if not self.dirty or self.save(automatic=True):
             return False
         if self.confirm("Закрыть без сохранения?", "Закрыть"):
             return False
