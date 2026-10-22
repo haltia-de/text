@@ -1,5 +1,19 @@
 # Что нового · What's new
 
+## 2.0.4 (2026-10-22)
+
+### Русский
+
+Заметка сохраняется сама через несколько секунд после ввода и при закрытии окна, с понятным именем, например «Заметка 22 октября 14-05».
+
+Удаление заметки без корзины требует подтверждения; новая несохранённая заметка больше не пропадает молча (#4).
+
+### English
+
+A note saves itself a few seconds after typing and when the window closes, with a readable name such as “Заметка 22 октября 14-05”.
+
+Deleting a note without the trash asks for confirmation; a new unsaved note is never dropped silently (#4).
+
 ## 2.0.3 (2026-10-19)
 
 ### Русский
