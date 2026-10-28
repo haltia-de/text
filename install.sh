@@ -15,7 +15,23 @@ here=$(cd "$(dirname "$0")" && pwd)
 share=$root$prefix/share
 id=io.github.haltia_de.Text
 old=io.github.trudenboy.Text
-install -D -m 755 "$here/haltia-text" "$root$prefix/bin/haltia-text"
+# The program runs from PREFIX/lib/haltia-text/haltia_text_main.py as a module, so
+# Python loads it compiled (the package build writes its __pycache__);
+# Python never caches the script it is started by. PREFIX/bin/haltia-text
+# is a stub that runs the module, so the command line stays
+# "python3 PREFIX/bin/haltia-text" (the Haltia shell finds programs by it).
+lib=$prefix/lib/haltia-text
+install -D -m 644 "$here/haltia-text" "$root$lib/haltia_text_main.py"
+install -d -m 755 "$root$prefix/bin"
+cat > "$root$prefix/bin/haltia-text" <<EOF
+#!/usr/bin/env python3
+# Runs $lib/haltia_text_main.py as a module, so Python loads it compiled.
+import runpy
+import sys
+sys.path.insert(0, "$lib")
+runpy.run_module("haltia_text_main", run_name="__main__", alter_sys=False)
+EOF
+chmod 755 "$root$prefix/bin/haltia-text"
 ln -sfn haltia-text "$root$prefix/bin/b8k-text"
 install -D -m 644 "$here/data/$id.desktop" "$share/applications/$id.desktop"
 install -D -m 644 "$here/data/$old.desktop" "$share/applications/$old.desktop"
