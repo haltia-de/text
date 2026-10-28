@@ -13,7 +13,6 @@ it off the list. Text only: UTF-8, at most 2 MB.
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime
 
 import gi
@@ -93,15 +92,11 @@ def trash(path, parent):
 
 
 def documents():
-    try:
-        import subprocess
-
-        out = subprocess.run(["xdg-user-dir", "DOCUMENTS"], capture_output=True, text=True,
-                             timeout=3).stdout.strip()
-        if out and out != os.path.expanduser("~"):
-            return out
-    except (OSError, ValueError):
-        pass
+    # GLib reads user-dirs.dirs itself: no xdg-user-dir process on the GTK
+    # thread at every save (an autosave too).
+    out = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_DOCUMENTS)
+    if out and out != os.path.expanduser("~"):
+        return out
     return os.path.expanduser("~/Документы")
 
 
@@ -396,6 +391,11 @@ class Text(Gtk.Application):
         buf = self.view.get_buffer()
         text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
         temporary = None
+        # Imported on the first save, not before the first window: tempfile
+        # brings random and shutil, and a stdlib module costs the tablet
+        # 0.2-0.3 s at start.
+        import tempfile
+
         try:
             os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
