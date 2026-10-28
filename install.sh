@@ -24,7 +24,7 @@ lib=$prefix/lib/haltia-text
 install -D -m 644 "$here/haltia-text" "$root$lib/haltia_text_main.py"
 install -d -m 755 "$root$prefix/bin"
 cat > "$root$prefix/bin/haltia-text" <<EOF
-#!/usr/bin/python3
+#!/usr/bin/env python3
 # Runs $lib/haltia_text_main.py as a module, so Python loads it compiled.
 import runpy
 import sys
