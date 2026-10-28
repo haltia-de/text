@@ -17,7 +17,8 @@ Only UTF-8 text, at most 2 MB. The application id is
 - `data/io.github.trudenboy.Text.desktop` — hidden launcher of the old id.
   `install.sh` also links `b8k-text` to `haltia-text`. Both stay until 3.0.
   At startup the old `b8k-text` data directory is migrated.
-- `install.sh` — installs the script, both launchers, the icon and metainfo.
+- `install.sh` — installs the script (as a module in `PREFIX/lib/haltia-text`,
+  run by a stub in `PREFIX/bin`), both launchers, the icon and metainfo.
 - `packaging/alpine/APKBUILD` — Alpine package `haltia-text` (`noarch`).
 - `NEWS.md` — release notes, Russian and English.
 - `.github/workflows/release.yml` — runs when a `vX.Y.Z` tag is pushed.
@@ -41,6 +42,15 @@ sh install.sh
 
 `sh install.sh [ROOT] [PREFIX]` installs under that root and prefix.
 PREFIX defaults to `/usr/local`. Alpine calls `sh ./install.sh "$pkgdir" /usr`.
+
+`install.sh` installs the script as the module
+`PREFIX/lib/haltia-text/haltia_text_main.py` and writes
+`PREFIX/bin/haltia-text` as a stub that runs it with `runpy.run_module(...,
+alter_sys=False)`: Python never caches the script it is started by, so the
+program's code loads from the `__pycache__` the package build writes
+(haltia-de/ci compiles every module). `sys.argv` and the command line
+`python3 PREFIX/bin/haltia-text` stay as they were (the Haltia shell finds
+programs by it); `__file__` is the module in `PREFIX/lib/haltia-text`.
 
 ## Release
 
