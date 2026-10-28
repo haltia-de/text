@@ -1,5 +1,15 @@
 # Что нового · What's new
 
+## 2.0.5 (2026-10-28)
+
+### Русский
+
+Чтобы найти папку «Документы», Блокнот больше не запускает при каждом сохранении отдельную программу, и открывается он немного быстрее.
+
+### English
+
+Notepad no longer runs a separate program at every save to find the Documents folder, and it starts a little faster.
+
 ## 2.0.4 (2026-10-22)
 
 ### Русский

@@ -18,6 +18,12 @@
   <content_rating type="oars-1.1"/>
   <requires><control>touch</control></requires>
   <releases>
+    <release version="2.0.5" date="2026-10-28">
+      <description>
+        <p>Notepad no longer runs a separate program at every save to find the Documents folder, and it starts a little faster.</p>
+        <p xml:lang="ru">Чтобы найти папку «Документы», Блокнот больше не запускает при каждом сохранении отдельную программу, и открывается он немного быстрее.</p>
+      </description>
+    </release>
     <release version="2.0.4" date="2026-10-22">
       <description>
         <p>A note saves itself a few seconds after typing and when the window closes, with a readable name such as “Заметка 22 октября 14-05”.</p>
